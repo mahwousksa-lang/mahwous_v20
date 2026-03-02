@@ -505,3 +505,61 @@ class SmartEngine:
         })
 
         return results
+
+
+# ═══════════════════════════════════════════════════
+# SmartEngineV21 — مع AI كطبقة رابعة
+# ═══════════════════════════════════════════════════
+class SmartEngineV21(SmartEngine):
+    """محرك v21 مع Gemini AI كطبقة رابعة للمطابقة الغامضة"""
+
+    def __init__(self, db=None, ai_engine=None):
+        super().__init__(db=db)
+        self.ai = ai_engine
+
+    def match(self, my_product: str, competitor_product: str):
+        """مطابقة بـ 5 طبقات: بصمة → alias → حقول → AI → fallback"""
+        base = super().match(my_product, competitor_product)
+        conf = base["confidence"]
+
+        # إذا كانت نتيجة الطبقات 3 واضحة، نُرجعها مباشرة
+        if conf >= 85 or conf < 50:
+            return base
+
+        # ─── الطبقة 4: Gemini AI للحالات الغامضة (50-84%) ───
+        if self.ai and self.ai.available:
+            ai_result = self.ai.match_products(my_product, competitor_product)
+            if ai_result.get("is_same") is not None:
+                ai_conf = ai_result.get("confidence", conf)
+                # دمج: نعطي وزن 60% للـ AI و 40% للمحرك الذكي
+                blended = round(ai_conf * 0.6 + conf * 0.4, 1)
+                if ai_result["is_same"] and blended >= 70:
+                    match_type = "exact_match"
+                elif not ai_result["is_same"]:
+                    match_type = "no_match"
+                    blended = min(blended, 49)
+                else:
+                    match_type = "review"
+
+                return {
+                    "confidence": blended,
+                    "match_type": match_type,
+                    "details": f"🤖 AI: {ai_result.get('reason','')} | {base['details']}",
+                    "ai_used": True,
+                    "ai_source": ai_result.get("source", "gemini"),
+                }
+
+        return base
+
+    def analyze(self, my_products, competitor_products, competitor_name,
+                session_id=None, progress_callback=None):
+        """تحليل شامل مع تقدم مفصّل"""
+        results = super().analyze(
+            my_products, competitor_products, competitor_name,
+            session_id=session_id,
+            progress_callback=progress_callback
+        )
+        # إضافة إحصائيات AI
+        if self.ai:
+            results["ai_stats"] = self.ai.stats
+        return results
