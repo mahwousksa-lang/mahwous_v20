@@ -1,176 +1,248 @@
 import streamlit as st
 import pandas as pd
+import time
 import json
-import requests
-from engines.engine import run_full_analysis
-from engines.hybrid_matcher import hybrid_score
-from engines.ai_engine import ai_chat, ai_market_lookup, ai_product_description
-from utils.helpers import normalize_text
-from utils.make_helper import send_to_make
-from config import Config
-from styles import MAIN_CSS
 
-# ---------------------------------------------------------
-# إعدادات الصفحة
-# ---------------------------------------------------------
+from utils.helpers import read_uploaded_file, extract_products, generate_session_id
+from utils.make_helper import send_price_updates, send_missing_products, send_full_report
+from engines.smart_engine import run_full_analysis, SmartEngineV21
+from engines.ai_engine import AIEngine
+from database.db_manager import DatabaseManager
+from ui.styles import inject_css, render_header, render_stats_cards, render_product_card
+
+from config import (
+    WEBHOOK_UPDATE_PRICES,
+    WEBHOOK_NEW_PRODUCTS,
+    WEBHOOK_REPORT,
+)
+
+
+# ─────────────────────────────────────────────
+# تهيئة الصفحة
+# ─────────────────────────────────────────────
 st.set_page_config(
-    page_title="MahwousStore v22",
-    layout="wide",
+    page_title="مهووس v22 — نظام التسعير الذكي",
+    page_icon="🧪",
+    layout="wide"
 )
 
-st.markdown(MAIN_CSS, unsafe_allow_html=True)
+inject_css()
 
-st.title("🧪 MahwousStore v22 — نظام التسعير الذكي + المطابقة المتقدمة")
-st.write("نسخة كاملة نظيفة تشمل كل ميزات v19 + محرك المطابقة الجديد Hybrid Arabic‑BERT")
 
-# ---------------------------------------------------------
-# الشريط الجانبي
-# ---------------------------------------------------------
-st.sidebar.header("📂 رفع الملفات")
+# ─────────────────────────────────────────────
+# تحميل قاعدة البيانات
+# ─────────────────────────────────────────────
+db = DatabaseManager()
 
-file_my = st.sidebar.file_uploader("ملف مهووس (CSV/Excel)", type=["csv", "xlsx"])
-files_competitors = st.sidebar.file_uploader(
-    "ملفات المنافسين (1–5 ملفات)", type=["csv", "xlsx"], accept_multiple_files=True
+
+# ─────────────────────────────────────────────
+# إعدادات AI
+# ─────────────────────────────────────────────
+st.sidebar.title("⚙️ الإعدادات")
+
+api_keys_raw = st.sidebar.text_area(
+    "🔑 مفاتيح Gemini (كل مفتاح في سطر)",
+    placeholder="AIzaSyA...."
 )
 
-start_button = st.sidebar.button("🚀 بدء التحليل")
+api_keys = [k.strip() for k in api_keys_raw.split("\n") if k.strip()]
+ai_engine = AIEngine(api_keys) if api_keys else None
 
-# ---------------------------------------------------------
-# Tabs
-# ---------------------------------------------------------
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📊 لوحة التحكم",
-    "🔵 المنتجات المفقودة",
-    "🔍 مقارنة منتجين",
-    "💹 بحث سوق",
-    "🤖 الذكاء الاصطناعي"
-])
 
-# ---------------------------------------------------------
-# 1) لوحة التحكم
-# ---------------------------------------------------------
-with tab1:
-    st.subheader("📊 لوحة التحكم")
+# ─────────────────────────────────────────────
+# رفع الملفات
+# ─────────────────────────────────────────────
+st.sidebar.subheader("📤 رفع الملفات")
 
-    if start_button and file_my and files_competitors:
-        st.info("جاري التحليل…")
+my_file = st.sidebar.file_uploader("ملف منتجاتك", type=["csv", "xlsx"])
+comp_files = st.sidebar.file_uploader(
+    "ملفات المنافسين",
+    type=["csv", "xlsx"],
+    accept_multiple_files=True
+)
 
-        df_my = pd.read_csv(file_my) if file_my.name.endswith(".csv") else pd.read_excel(file_my)
+start_btn = st.sidebar.button("🚀 بدء التحليل")
 
-        dfs_comp = []
-        for f in files_competitors:
-            df = pd.read_csv(f) if f.name.endswith(".csv") else pd.read_excel(f)
-            dfs_comp.append(df)
 
-        results = run_full_analysis(df_my, dfs_comp)
+# ─────────────────────────────────────────────
+# الواجهة الرئيسية
+# ─────────────────────────────────────────────
+render_header(
+    ai_available=ai_engine.available if ai_engine else False,
+    ai_calls=ai_engine.stats["calls"] if ai_engine else 0
+)
 
-        st.success("تم التحليل بنجاح!")
 
-        st.write("### 🔴 سعر أعلى")
-        st.dataframe(results["higher"], use_container_width=True)
+# ─────────────────────────────────────────────
+# تنفيذ التحليل
+# ─────────────────────────────────────────────
+if start_btn:
 
-        st.write("### 🟢 سعر أقل")
-        st.dataframe(results["lower"], use_container_width=True)
+    if not my_file:
+        st.error("❌ الرجاء رفع ملف منتجاتك أولاً")
+        st.stop()
 
-        st.write("### ✅ موافق عليها")
-        st.dataframe(results["approved"], use_container_width=True)
+    if not comp_files:
+        st.error("❌ الرجاء رفع ملفات المنافسين")
+        st.stop()
 
-        st.write("### 🔵 مفقودة")
-        st.dataframe(results["missing"], use_container_width=True)
+    # قراءة ملفي
+    df_my = read_uploaded_file(my_file)
+    if df_my is None:
+        st.error("❌ تعذر قراءة ملف منتجاتك")
+        st.stop()
 
-    else:
-        st.warning("يرجى رفع الملفات ثم الضغط على زر التحليل.")
+    my_products = extract_products(df_my, is_my_file=True)
 
-# ---------------------------------------------------------
-# 2) المنتجات المفقودة
-# ---------------------------------------------------------
-with tab2:
-    st.subheader("🔵 المنتجات المفقودة — محرك Hybrid Arabic‑BERT")
+    # قراءة ملفات المنافسين
+    competitors_data = {}
+    for f in comp_files:
+        df = read_uploaded_file(f)
+        if df is None:
+            st.warning(f"⚠️ تعذر قراءة ملف: {f.name}")
+            continue
+        competitors_data[f.name] = extract_products(df)
 
-    file_my2 = st.file_uploader("ملف منتجاتك", type=["csv", "xlsx"], key="my2")
-    file_comp2 = st.file_uploader("ملف المنافس", type=["csv", "xlsx"], key="comp2")
+    session_id = generate_session_id()
 
-    if file_my2 and file_comp2:
-        df_my = pd.read_csv(file_my2) if file_my2.name.endswith(".csv") else pd.read_excel(file_my2)
-        df_comp = pd.read_csv(file_comp2) if file_comp2.name.endswith(".csv") else pd.read_excel(file_comp2)
+    progress = st.progress(0)
+    status = st.empty()
 
-        results = []
+    all_results = {}
+    total_files = len(competitors_data)
+    file_idx = 0
 
-        with st.spinner("جاري المطابقة…"):
-            for _, row_c in df_comp.iterrows():
-                best_match = None
-                best_score = 0
+    for comp_name, comp_products in competitors_data.items():
+        file_idx += 1
 
-                for _, row_m in df_my.iterrows():
-                    score = hybrid_score(str(row_c["name"]), str(row_m["name"]))
-                    if score > best_score:
-                        best_score = score
-                        best_match = row_m["name"]
+        def update_progress(p, msg):
+            progress.progress(p)
+            status.write(f"📊 {msg}")
 
-                status = (
-                    "مطابق" if best_score >= 0.90 else
-                    "موجود باسم مختلف" if best_score >= 0.75 else
-                    "مراجعة" if best_score >= 0.55 else
-                    "مفقود فعليًا"
-                )
-
-                results.append({
-                    "منتج المنافس": row_c["name"],
-                    "أفضل تطابق": best_match,
-                    "النتيجة": round(best_score, 3),
-                    "الحالة": status
-                })
-
-        df_res = pd.DataFrame(results)
-        st.dataframe(df_res, use_container_width=True)
-
-        st.download_button(
-            "📥 تحميل النتائج CSV",
-            df_res.to_csv(index=False).encode("utf-8-sig"),
-            "missing_products.csv",
-            "text/csv"
+        results = run_full_analysis(
+            my_products=my_products,
+            competitor_products=comp_products,
+            competitor_name=comp_name,
+            db=db,
+            ai=ai_engine,
+            session_id=session_id,
+            progress_callback=update_progress
         )
 
-# ---------------------------------------------------------
-# 3) مقارنة منتجين
-# ---------------------------------------------------------
-with tab3:
-    st.subheader("🔍 مقارنة منتجين")
+        all_results[comp_name] = results
 
-    p1 = st.text_input("اسم المنتج الأول")
-    p2 = st.text_input("اسم المنتج الثاني")
+        progress.progress(file_idx / total_files)
+        status.write(f"📁 اكتمل تحليل {comp_name}")
 
-    if st.button("تحقق الآن"):
-        score = hybrid_score(p1, p2)
-        st.write("### النتيجة:", round(score, 3))
+    st.success("🎉 اكتمل التحليل بالكامل!")
 
-        if score >= 0.90:
-            st.success("مطابق بنسبة عالية")
-        elif score >= 0.75:
-            st.info("موجود باسم مختلف")
-        elif score >= 0.55:
-            st.warning("يحتاج مراجعة")
-        else:
-            st.error("غير مطابق")
 
-# ---------------------------------------------------------
-# 4) بحث سوق
-# ---------------------------------------------------------
-with tab4:
-    st.subheader("💹 بحث سوق")
+    # ─────────────────────────────────────────────
+    # عرض الإحصائيات العامة
+    # ─────────────────────────────────────────────
+    total_stats = {
+        "higher": 0,
+        "lower": 0,
+        "equal": 0,
+        "review": 0,
+        "missing": 0,
+        "price_changes": 0,
+    }
 
-    product_name = st.text_input("اسم المنتج للبحث")
-    if st.button("ابحث"):
-        result = ai_market_lookup(product_name)
-        st.write(result)
+    for comp, res in all_results.items():
+        for k in total_stats:
+            total_stats[k] += res["stats"].get(k, 0)
 
-# ---------------------------------------------------------
-# 5) الذكاء الاصطناعي
-# ---------------------------------------------------------
-with tab5:
-    st.subheader("🤖 الذكاء الاصطناعي")
+    render_stats_cards(total_stats)
 
-    user_msg = st.text_area("اكتب سؤالك")
-    if st.button("إرسال"):
-        reply = ai_chat(user_msg)
-        st.write(reply)
+
+    # ─────────────────────────────────────────────
+    # عرض النتائج لكل منافس
+    # ─────────────────────────────────────────────
+    st.header("📦 النتائج التفصيلية")
+
+    for comp, res in all_results.items():
+        st.subheader(f"🏪 {comp}")
+
+        # أعلى
+        if res["higher"]:
+            st.markdown("### 🔴 سعرك أعلى")
+            for item in res["higher"]:
+                st.markdown(render_product_card(
+                    name=item["my_name"],
+                    my_price=item["my_price"],
+                    competitors={item["competitor"]: item["comp_price"]},
+                    product_no=item["product_no"],
+                    brand=item["brand"],
+                    ai_suggested=None
+                ), unsafe_allow_html=True)
+
+        # أقل
+        if res["lower"]:
+            st.markdown("### 🟢 سعرك أقل")
+            for item in res["lower"]:
+                st.markdown(render_product_card(
+                    name=item["my_name"],
+                    my_price=item["my_price"],
+                    competitors={item["competitor"]: item["comp_price"]},
+                    product_no=item["product_no"],
+                    brand=item["brand"],
+                    ai_suggested=None
+                ), unsafe_allow_html=True)
+
+        # مساوي
+        if res["equal"]:
+            st.markdown("### 🔵 سعر متطابق")
+            for item in res["equal"]:
+                st.markdown(render_product_card(
+                    name=item["my_name"],
+                    my_price=item["my_price"],
+                    competitors={item["competitor"]: item["comp_price"]},
+                    product_no=item["product_no"],
+                    brand=item["brand"],
+                    ai_suggested=None
+                ), unsafe_allow_html=True)
+
+        # مراجعة
+        if res["review"]:
+            st.markdown("### ⚠️ يحتاج مراجعة")
+            for item in res["review"]:
+                st.markdown(render_product_card(
+                    name=item["my_name"],
+                    my_price=item["my_price"],
+                    competitors={item["competitor"]: item["comp_price"]},
+                    product_no=item["product_no"],
+                    brand=item["brand"],
+                    ai_suggested=None
+                ), unsafe_allow_html=True)
+
+        # مفقود
+        if res["missing"]:
+            st.markdown("### 🟡 منتجات مفقودة")
+            for item in res["missing"]:
+                st.info(f"❗ {item['comp_name']} — {item['comp_price']} ريال — {item['competitor']}")
+
+
+    # ─────────────────────────────────────────────
+    # إرسال النتائج إلى Make.com
+    # ─────────────────────────────────────────────
+    st.header("🔗 إرسال النتائج إلى Make.com")
+
+    if st.button("📤 إرسال تحديثات الأسعار"):
+        all_updates = []
+        for comp, res in all_results.items():
+            all_updates.extend(res["higher"])
+            all_updates.extend(res["lower"])
+        r = send_price_updates(WEBHOOK_UPDATE_PRICES, all_updates, session_id)
+        st.write(r)
+
+    if st.button("📤 إرسال المنتجات المفقودة"):
+        all_missing = []
+        for comp, res in all_results.items():
+            all_missing.extend(res["missing"])
+        r = send_missing_products(WEBHOOK_NEW_PRODUCTS, all_missing, session_id)
+        st.write(r)
+
+    if st.button("📤 إرسال تقرير كامل"):
+        r = send_full_report(WEBHOOK_REPORT, total_stats, session_id)
+        st.write(r)
