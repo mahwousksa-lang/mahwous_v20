@@ -517,14 +517,27 @@ class DatabaseManager:
         self.log_action("missing_ignored", "missing", missing_id, details=reason)
         self.conn.commit()
 
-    # ─────────────────────────────────────────────
+      # ─────────────────────────────────────────────
     # Price Modifications
     # ─────────────────────────────────────────────
-    def create_price_modification(self, my_product_id, product_no, product_name, old_price, new_price, reason="", competitor_name="", competitor_price=0, session_id=None):
+    def create_price_modification(
+        self,
+        my_product_id,
+        product_no,
+        product_name,
+        old_price,
+        new_price,
+        reason="",
+        competitor_name="",
+        competitor_price=0,
+        session_id=None,
+    ):
         existing = self.conn.execute("""
             SELECT id FROM price_modifications 
             WHERE my_product_id=? AND status='pending'
         """, (my_product_id,)).fetchone()
+
+        price_diff = (new_price or 0) - (old_price or 0)
 
         if existing:
             self.conn.execute("""
@@ -533,4 +546,70 @@ class DatabaseManager:
                 WHERE id=?
             """, (
                 new_price,
-                new_price
+                price_diff,
+                reason,
+                competitor_name,
+                competitor_price,
+                session_id,
+                existing["id"],
+            ))
+            self.conn.commit()
+            return existing["id"]
+
+        cur = self.conn.execute("""
+            INSERT INTO price_modifications
+            (my_product_id,my_product_no,my_product_name,old_price,new_price,price_diff,reason,competitor_name,competitor_price,status,session_id)
+            VALUES (?,?,?,?,?,?,?,?,?,'pending',?)
+        """, (
+            my_product_id,
+            product_no,
+            product_name,
+            old_price,
+            new_price,
+            price_diff,
+            reason,
+            competitor_name,
+            competitor_price,
+            session_id,
+        ))
+        self.conn.commit()
+        return cur.lastrowid
+
+    # ─────────────────────────────────────────────
+    # سجل العمليات
+    # ─────────────────────────────────────────────
+    def log_action(
+        self,
+        action,
+        target_type,
+        target_id=None,
+        target_fp=None,
+        details=None,
+        old_value=None,
+        new_value=None,
+        session_id=None,
+    ):
+        self.conn.execute("""
+            INSERT INTO action_log
+            (action,target_type,target_id,target_fp,details,old_value,new_value,session_id)
+            VALUES (?,?,?,?,?,?,?,?)
+        """, (
+            action,
+            target_type,
+            target_id,
+            target_fp,
+            details,
+            old_value,
+            new_value,
+            session_id,
+        ))
+        self.conn.commit()
+
+    # ─────────────────────────────────────────────
+    # إغلاق الاتصال
+    # ─────────────────────────────────────────────
+    def close(self):
+        try:
+            self.conn.close()
+        except:
+            pass
