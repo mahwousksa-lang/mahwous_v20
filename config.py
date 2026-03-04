@@ -1,12 +1,5 @@
 """
-مهووس v22 — الإعدادات المركزية
-نسخة نظيفة تشمل:
-- إعدادات v20 الأصلية
-- دعم محرك المطابقة Hybrid Arabic‑BERT
-- عتبات مطابقة محسّنة
-- مرادفات الماركات والتركيز
-- إعدادات Make.com
-- إعدادات قاعدة البيانات
+إعدادات مهووس v20/v22 — نسخة كاملة
 """
 
 import os
@@ -21,6 +14,7 @@ GEMINI_API_KEYS = os.environ.get("GEMINI_API_KEYS", "[]")
 # ─────────────────────────────────────────────
 WEBHOOK_UPDATE_PRICES = os.environ.get("WEBHOOK_UPDATE_PRICES", "")
 WEBHOOK_NEW_PRODUCTS = os.environ.get("WEBHOOK_NEW_PRODUCTS", "")
+WEBHOOK_REPORT = os.environ.get("WEBHOOK_REPORT", "")
 
 # ─────────────────────────────────────────────
 # 🗄 قاعدة البيانات
@@ -28,13 +22,36 @@ WEBHOOK_NEW_PRODUCTS = os.environ.get("WEBHOOK_NEW_PRODUCTS", "")
 DB_PATH = "data/mahwous.db"
 
 # ─────────────────────────────────────────────
-# 🧠 عتبات المطابقة (Hybrid Arabic‑BERT)
+# 📦 أعمدة الملفات (مطلوبة من helpers.py)
+# ─────────────────────────────────────────────
+PRODUCT_COLUMNS = [
+    "product_no",
+    "raw_name",
+    "brand",
+    "price",
+]
+
+PRICE_COLUMNS = [
+    "raw_name",
+    "price",
+]
+
+ID_COLUMNS = [
+    "product_no",
+]
+
+BRAND_COLUMNS = [
+    "brand",
+]
+
+# ─────────────────────────────────────────────
+# 🧠 عتبات المطابقة
 # ─────────────────────────────────────────────
 MATCH_THRESHOLDS = {
-    "exact": 0.90,     # مطابق تمامًا
-    "alias": 0.75,     # موجود باسم مختلف
-    "review": 0.55,    # يحتاج مراجعة
-    "reject": 0.40     # مرفوض
+    "exact": 0.90,
+    "alias": 0.75,
+    "review": 0.55,
+    "reject": 0.40,
 }
 
 # ─────────────────────────────────────────────
@@ -43,7 +60,6 @@ MATCH_THRESHOLDS = {
 BRAND_SYNONYMS = {
     "dior": "Dior",
     "christian dior": "Dior",
-    "dior perfumes": "Dior",
     "ysl": "Yves Saint Laurent",
     "yves saint laurent": "Yves Saint Laurent",
     "armani": "Giorgio Armani",
@@ -55,9 +71,7 @@ BRAND_SYNONYMS = {
 # ─────────────────────────────────────────────
 CONCENTRATION_SYNONYMS = {
     "edp": "Eau de Parfum",
-    "eau de parfum": "Eau de Parfum",
     "edt": "Eau de Toilette",
-    "eau de toilette": "Eau de Toilette",
     "parfum": "Parfum",
 }
 
