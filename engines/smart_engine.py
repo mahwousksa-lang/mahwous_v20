@@ -1,20 +1,24 @@
 """
-مهووس v20 — محرك المطابقة الذكي
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+مهووس v21 — محرك المطابقة الذكي + طبقة AI اختيارية
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 • تفكيك المنتج لحقول ذكية (ماركة، اسم، تركيز، حجم)
 • بصمة فريدة لمنع التكرار
 • مطابقة متعددة الطبقات
 • تصنيف 5 مستويات
 • قاموس مرادفات عربي ↔ إنجليزي
+• طبقة رابعة اختيارية بالذكاء الاصطناعي (Gemini) للحالات الغامضة
 """
+
 import re
 import unicodedata
 from difflib import SequenceMatcher
+from typing import List, Dict, Optional, Callable, Any
+
 from config import CONCENTRATION_SYNONYMS, BRAND_SYNONYMS, MATCH_THRESHOLDS
 
 
 class SmartEngine:
-    """محرك المطابقة الذكي v20"""
+    """محرك المطابقة الذكي v21 (بدون AI)"""
 
     def __init__(self, db=None):
         self.db = db
@@ -37,14 +41,20 @@ class SmartEngine:
     # ═══════════════════════════════════════════════════
     # 1. تفكيك المنتج (Smart Parsing)
     # ═══════════════════════════════════════════════════
-    def parse_product(self, raw_name):
+    def parse_product(self, raw_name: str) -> Dict[str, Any]:
         """
         تفكيك اسم المنتج إلى حقول ذكية
         مثال: "Dior Sauvage EDP 100ml" →
         {brand: "dior", name: "sauvage", concentration: "edp", size: 100}
         """
         if not raw_name or not isinstance(raw_name, str):
-            return {"brand": "", "name": str(raw_name or ""), "concentration": "", "size": None, "raw": str(raw_name or "")}
+            return {
+                "brand": "",
+                "name": str(raw_name or ""),
+                "concentration": "",
+                "size": None,
+                "raw": str(raw_name or ""),
+            }
 
         text = self._normalize(raw_name)
         result = {
@@ -108,7 +118,7 @@ class SmartEngine:
 
         return result
 
-    def _normalize(self, text):
+    def _normalize(self, text: str) -> str:
         """تطبيع النص"""
         if not text:
             return ""
@@ -126,7 +136,7 @@ class SmartEngine:
         text = re.sub(r'\s+', ' ', text).strip()
         return text
 
-    def _clean_name(self, text):
+    def _clean_name(self, text: str) -> str:
         """تنظيف الاسم من الكلمات الفارغة"""
         stopwords = {
             'for', 'men', 'women', 'homme', 'femme', 'pour', 'by', 'de', 'la', 'le',
@@ -140,7 +150,7 @@ class SmartEngine:
     # ═══════════════════════════════════════════════════
     # 2. البصمة الفريدة (Fingerprint)
     # ═══════════════════════════════════════════════════
-    def fingerprint(self, raw_name, brand_hint=None):
+    def fingerprint(self, raw_name: str, brand_hint: Optional[str] = None) -> str:
         """
         إنشاء بصمة فريدة للمنتج — أساس منع التكرار
         البصمة = ماركة_اسم_تركيز_حجم
@@ -156,7 +166,7 @@ class SmartEngine:
         fp = re.sub(r'_+', '_', fp)
         return fp if len(fp) > 3 else self._fallback_fingerprint(raw_name)
 
-    def _fallback_fingerprint(self, raw_name):
+    def _fallback_fingerprint(self, raw_name: str) -> str:
         """بصمة احتياطية للأسماء التي لا يمكن تفكيكها"""
         text = self._normalize(str(raw_name).lower())
         text = re.sub(r'[^a-z0-9\u0600-\u06FF]', '', text)
@@ -165,7 +175,71 @@ class SmartEngine:
     # ═══════════════════════════════════════════════════
     # 3. المطابقة متعددة الطبقات
     # ═══════════════════════════════════════════════════
-    def match(self, my_product, competitor_product):
+    def _name_similarity(self, a: str, b: str) -> float:
+        """تشابه الأسماء (0-1)"""
+        a = (a or "").strip().lower()
+        b = (b or "").strip().lower()
+        if not a or not b:
+            return 0.0
+        return SequenceMatcher(None, a, b).ratio()
+
+    def _field_match(self, p1: Dict[str, Any], p2: Dict[str, Any]) -> float:
+        """مطابقة بالحقول مع أوزان"""
+        score = 0.0
+
+        # الماركة (30%)
+        brand_score = 0.0
+        if p1["brand"] and p2["brand"]:
+            if p1["brand"] == p2["brand"]:
+                brand_score = 100
+            elif self._name_similarity(p1["brand"], p2["brand"]) > 0.7:
+                brand_score = 80
+        elif not p1["brand"] and not p2["brand"]:
+            brand_score = 50  # كلاهما بدون ماركة
+        score += brand_score * 0.30
+
+        # الاسم (40%)
+        name_score = self._name_similarity(p1["name"], p2["name"]) * 100
+        score += name_score * 0.40
+
+        # التركيز (15%)
+        conc_score = 0.0
+        if p1["concentration"] and p2["concentration"]:
+            conc_score = 100 if p1["concentration"] == p2["concentration"] else 20
+        elif not p1["concentration"] and not p2["concentration"]:
+            conc_score = 70
+        else:
+            conc_score = 50
+        score += conc_score * 0.15
+
+        # الحجم (15%)
+        size_score = 0.0
+        if p1["size"] and p2["size"]:
+            if abs(p1["size"] - p2["size"]) <= 5:
+                size_score = 100
+            elif abs(p1["size"] - p2["size"]) <= 20:
+                size_score = 60
+            else:
+                size_score = 20
+        elif not p1["size"] and not p2["size"]:
+            size_score = 60
+        else:
+            size_score = 40
+        score += size_score * 0.15
+
+        return score
+
+    def _build_details(self, p1: Dict[str, Any], p2: Dict[str, Any], score: float) -> str:
+        """تفاصيل نصية عن المطابقة"""
+        return (
+            f"ماركة: {p1['brand']} ↔ {p2['brand']} | "
+            f"اسم: {p1['name']} ↔ {p2['name']} | "
+            f"تركيز: {p1['concentration']} ↔ {p2['concentration']} | "
+            f"حجم: {p1['size']} ↔ {p2['size']} | "
+            f"الدرجة: {score:.1f}"
+        )
+
+    def match(self, my_product: str, competitor_product: str) -> Dict[str, Any]:
         """
         مطابقة منتج من مهووس مع منتج منافس
         يرجع: {confidence, match_type, details}
@@ -177,19 +251,26 @@ class SmartEngine:
         fp1 = self.fingerprint(my_product)
         fp2 = self.fingerprint(competitor_product)
         if fp1 == fp2:
-            return {"confidence": 100, "match_type": "exact_match", "details": "تطابق كامل بالبصمة"}
+            return {
+                "confidence": 100,
+                "match_type": "exact_match",
+                "details": "تطابق كامل بالبصمة",
+            }
 
         # ─── الطبقة 2: الأسماء البديلة في قاعدة البيانات ───
         if self.db:
             alias_match = self.db.find_by_alias(competitor_product.strip().lower())
             if alias_match and alias_match["fingerprint"] == fp1:
-                return {"confidence": 99, "match_type": "exact_match", "details": "تطابق عبر الأسماء البديلة"}
+                return {
+                    "confidence": 99,
+                    "match_type": "exact_match",
+                    "details": "تطابق عبر الأسماء البديلة",
+                }
 
         # ─── الطبقة 3: مطابقة بالحقول الذكية ───
         score = self._field_match(p1, p2)
 
         # ─── تحديد النوع ───
-        match_type = "no_match"
         if score >= MATCH_THRESHOLDS["exact"]:
             match_type = "exact_match"
         elif score >= MATCH_THRESHOLDS["high"]:
@@ -212,199 +293,101 @@ class SmartEngine:
 
         details = self._build_details(p1, p2, score)
 
-        return {"confidence": round(score, 1), "match_type": match_type, "details": details}
-
-    def _field_match(self, p1, p2):
-        """مطابقة بالحقول مع أوزان"""
-        score = 0
-
-        # الماركة (30%)
-        brand_score = 0
-        if p1["brand"] and p2["brand"]:
-            if p1["brand"] == p2["brand"]:
-                brand_score = 100
-            elif self._name_similarity(p1["brand"], p2["brand"]) > 0.7:
-                brand_score = 80
-        elif not p1["brand"] and not p2["brand"]:
-            brand_score = 50  # كلاهما بدون ماركة
-        score += brand_score * 0.30
-
-        # الاسم (40%)
-        name_score = self._name_similarity(p1["name"], p2["name"]) * 100
-        score += name_score * 0.40
-
-        # التركيز (15%)
-        conc_score = 0
-        if p1["concentration"] and p2["concentration"]:
-            conc_score = 100 if p1["concentration"] == p2["concentration"] else 20
-        elif not p1["concentration"] and not p2["concentration"]:
-            conc_score = 70
-        else:
-            conc_score = 50
-        score += conc_score * 0.15
-
-        # الحجم (15%)
-        size_score = 0
-        if p1["size"] and p2["size"]:
-            size_score = 100 if p1["size"] == p2["size"] else 20
-        elif not p1["size"] and not p2["size"]:
-            size_score = 70
-        else:
-            size_score = 50
-        score += size_score * 0.15
-
-        return min(100, score)
-
-    def _name_similarity(self, name1, name2):
-        """حساب تشابه الأسماء"""
-        if not name1 or not name2:
-            return 0
-        n1 = name1.lower().strip()
-        n2 = name2.lower().strip()
-        if n1 == n2:
-            return 1.0
-
-        # Sequence matcher
-        ratio = SequenceMatcher(None, n1, n2).ratio()
-
-        # Token-based: تشابه الكلمات
-        words1 = set(n1.split())
-        words2 = set(n2.split())
-        if words1 and words2:
-            common = words1 & words2
-            token_ratio = len(common) / max(len(words1), len(words2))
-            ratio = max(ratio, token_ratio)
-
-        return ratio
-
-    def _build_details(self, p1, p2, score):
-        """بناء تفاصيل المطابقة"""
-        parts = []
-        if p1["brand"] == p2["brand"] and p1["brand"]:
-            parts.append(f"✅ ماركة: {p1['brand']}")
-        elif p1["brand"] or p2["brand"]:
-            parts.append(f"⚠️ ماركة: {p1['brand']} ↔ {p2['brand']}")
-
-        if p1["size"] and p2["size"]:
-            if p1["size"] == p2["size"]:
-                parts.append(f"✅ حجم: {p1['size']}ml")
-            else:
-                parts.append(f"🔄 حجم: {p1['size']}ml ↔ {p2['size']}ml")
-
-        if p1["concentration"] and p2["concentration"]:
-            if p1["concentration"] == p2["concentration"]:
-                parts.append(f"✅ تركيز: {p1['concentration']}")
-            else:
-                parts.append(f"🔄 تركيز: {p1['concentration']} ↔ {p2['concentration']}")
-
-        return " | ".join(parts) if parts else f"تشابه: {score:.0f}%"
-
-    # ═══════════════════════════════════════════════════
-    # 4. التحليل الشامل
-    # ═══════════════════════════════════════════════════
-    def analyze(self, my_products, competitor_products, competitor_name,
-                session_id=None, progress_callback=None):
-        """
-        التحليل الشامل مع منع التكرار وتتبع المفقودات
-
-        my_products: [{name, price, product_no, brand}, ...]
-        competitor_products: [{name, price}, ...]
-
-        يرجع: {
-            higher: [...],    # سعرك أعلى
-            lower: [...],     # سعرك أقل
-            equal: [...],     # نفس السعر
-            missing: [...],   # مفقود عندك
-            review: [...],    # يحتاج مراجعة
-            stats: {...},     # إحصائيات
-            price_changes: [...],  # تغييرات الأسعار
+        return {
+            "confidence": round(score, 1),
+            "match_type": match_type,
+            "details": details,
         }
+
+    # ═══════════════════════════════════════════════════
+    # 4. تحليل شامل لقائمة منتجات
+    # ═══════════════════════════════════════════════════
+    def analyze(
+        self,
+        my_products: List[Dict[str, Any]],
+        competitor_products: List[Dict[str, Any]],
+        competitor_name: str,
+        session_id: Optional[str] = None,
+        progress_callback: Optional[Callable[[float, str], None]] = None,
+    ) -> Dict[str, Any]:
+        """
+        تحليل شامل:
+        - يبني فهرس لمنتجات مهووس بالبصمة
+        - يمر على منتجات المنافس
+        - يحدد: أعلى / أقل / مساوي / مراجعة / مفقود
         """
         results = {
-            "higher": [], "lower": [], "equal": [],
-            "missing": [], "review": [], "price_changes": [],
-            "stats": {"total_my": len(my_products), "total_comp": len(competitor_products)}
+            "higher": [],
+            "lower": [],
+            "equal": [],
+            "review": [],
+            "missing": [],
+            "price_changes": [],
+            "stats": {
+                "matched": 0,
+                "higher": 0,
+                "lower": 0,
+                "equal": 0,
+                "missing": 0,
+                "review": 0,
+                "price_changes": 0,
+            },
         }
 
-        # ─── بناء فهرس منتجاتي ───
-        my_index = {}
-        for prod in my_products:
-            name = str(prod.get("name", ""))
-            fp = self.fingerprint(name, prod.get("brand"))
-            my_index[fp] = prod
-            # حفظ في قاعدة البيانات
-            if self.db:
-                parsed = self.parse_product(name)
-                master_id = self.db.upsert_master_product(fp, {
-                    "product_name": parsed["name"],
-                    "brand": parsed["brand"],
-                    "concentration": parsed["concentration"],
-                    "size_ml": parsed["size"],
-                })
-                self.db.upsert_my_product(fp, {
-                    "product_no": prod.get("product_no"),
-                    "raw_name": name,
-                    "price": prod.get("price"),
-                    "brand": parsed["brand"],
-                })
-                self.db.add_alias(master_id, name.strip().lower(), "my_product")
+        # بناء فهرس لمنتجاتي حسب البصمة
+        my_index: Dict[str, Dict[str, Any]] = {}
+        if self.db:
+            # تحميل من قاعدة البيانات إن وُجدت
+            my_index = self.db.get_all_my_fingerprints()
+        else:
+            for p in my_products:
+                fp = self.fingerprint(p.get("name", ""), p.get("brand"))
+                my_index[fp] = {
+                    "name": p.get("name", ""),
+                    "price": p.get("price", 0),
+                    "product_no": p.get("product_no", ""),
+                    "brand": p.get("brand", ""),
+                }
 
-        # ─── مطابقة كل منتج منافس ───
-        matched_my_fps = set()
-        total = len(competitor_products)
-
-        for i, comp_prod in enumerate(competitor_products):
-            if progress_callback:
-                progress_callback((i + 1) / total, f"تحليل {i+1}/{total}")
-
-            comp_name = str(comp_prod.get("name", ""))
-            comp_price = comp_prod.get("price", 0)
-            comp_fp = self.fingerprint(comp_name, comp_prod.get("brand"))
-
-            if not comp_name.strip():
+        total = len(competitor_products) or 1
+        for idx, comp in enumerate(competitor_products, start=1):
+            comp_name = str(comp.get("name", "")).strip()
+            comp_price = float(comp.get("price", 0) or 0)
+            if not comp_name:
                 continue
 
-            # ─── البحث عن أفضل تطابق ───
+            comp_fp = self.fingerprint(comp_name, comp.get("brand"))
             best_match = None
-            best_score = 0
+            best_score = 0.0
             best_fp = None
 
-            # أولاً: بصمة مباشرة
-            if comp_fp in my_index:
-                best_match = my_index[comp_fp]
-                best_score = 100
-                best_fp = comp_fp
-            else:
-                # ثانياً: مطابقة ذكية
-                for my_fp, my_prod in my_index.items():
-                    if my_fp in matched_my_fps:
-                        continue
-                    result = self.match(str(my_prod.get("name", "")), comp_name)
-                    if result["confidence"] > best_score:
-                        best_score = result["confidence"]
-                        best_match = my_prod
-                        best_fp = my_fp
-                        if best_score >= 97:
-                            break
+            # البحث عن أفضل تطابق في منتجاتي
+            for fp, my_p in my_index.items():
+                m = self.match(my_p.get("name", ""), comp_name)
+                score = m.get("confidence") or 0
+                if score > best_score:
+                    best_score = score
+                    best_match = my_p
+                    best_fp = fp
 
-            # ─── تسجيل سعر المنافس (تراكمي) ───
-            price_changed = False
-            prev_price = None
-            if self.db:
-                price_changed, prev_price = self.db.record_competitor_price(
-                    fingerprint=comp_fp,
-                    competitor_name=competitor_name,
-                    raw_name=comp_name,
-                    price=comp_price,
-                    session_id=session_id
-                )
-
-            # ─── تصنيف النتيجة ───
+            # ─── منتج مطابق ───
             if best_match and best_score >= MATCH_THRESHOLDS["medium"]:
-                matched_my_fps.add(best_fp)
-                my_price = best_match.get("price", 0) or 0
+                my_price = float(best_match.get("price", 0) or 0)
                 diff = round(my_price - comp_price, 2)
-                diff_pct = round((diff / comp_price * 100), 1) if comp_price else 0
+                diff_pct = round((diff / comp_price * 100), 1) if comp_price else 0.0
+
+                price_changed = False
+                prev_price = None
+                if self.db:
+                    price_changed, prev_price = self.db.record_competitor_price(
+                        fingerprint=best_fp,
+                        competitor_name=competitor_name,
+                        raw_name=comp_name,
+                        price=comp_price,
+                        master_id=None,
+                        session_id=session_id,
+                        source_file=None,
+                    )
 
                 # تعلم تراكمي: حفظ الاسم كـ alias
                 if self.db and best_score >= MATCH_THRESHOLDS["high"]:
@@ -488,6 +471,10 @@ class SmartEngine:
                     "possible_match_score": possible_score,
                 })
 
+            # تقدم
+            if progress_callback:
+                progress_callback(idx / total, f"تحليل منتجات {competitor_name} ({idx}/{total})")
+
         # ─── ترتيب النتائج ───
         results["higher"].sort(key=lambda x: x.get("diff_pct", 0), reverse=True)
         results["lower"].sort(key=lambda x: x.get("diff_pct", 0))
@@ -517,7 +504,7 @@ class SmartEngineV21(SmartEngine):
         super().__init__(db=db)
         self.ai = ai_engine
 
-    def match(self, my_product: str, competitor_product: str):
+    def match(self, my_product: str, competitor_product: str) -> Dict[str, Any]:
         """مطابقة بـ 5 طبقات: بصمة → alias → حقول → AI → fallback"""
         base = super().match(my_product, competitor_product)
         conf = base["confidence"]
@@ -551,13 +538,21 @@ class SmartEngineV21(SmartEngine):
 
         return base
 
-    def analyze(self, my_products, competitor_products, competitor_name,
-                session_id=None, progress_callback=None):
-        """تحليل شامل مع تقدم مفصّل"""
+    def analyze(
+        self,
+        my_products: List[Dict[str, Any]],
+        competitor_products: List[Dict[str, Any]],
+        competitor_name: str,
+        session_id: Optional[str] = None,
+        progress_callback: Optional[Callable[[float, str], None]] = None,
+    ) -> Dict[str, Any]:
+        """تحليل شامل مع تقدم مفصّل + إحصائيات AI"""
         results = super().analyze(
-            my_products, competitor_products, competitor_name,
+            my_products,
+            competitor_products,
+            competitor_name,
             session_id=session_id,
-            progress_callback=progress_callback
+            progress_callback=progress_callback,
         )
         # إضافة إحصائيات AI
         if self.ai:
