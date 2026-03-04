@@ -1,16 +1,19 @@
 """
-مهووس v21 — إرسال البيانات للـ Webhooks (Make.com)
+مهووس v22 — إرسال البيانات للـ Webhooks (Make.com)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 • إرسال تحديثات الأسعار → WEBHOOK_UPDATE_PRICES
 • إرسال المنتجات المفقودة → WEBHOOK_NEW_PRODUCTS
 • إرسال تقرير كامل → WEBHOOK_REPORT
 • دعم retry تلقائي عند الفشل
 """
+
 import json
 import time
 from datetime import datetime
 from typing import Optional
+from config import WEBHOOK_UPDATE_PRICES, WEBHOOK_NEW_PRODUCTS
 
+# محاولة استخدام urllib (الأفضل لـ Streamlit Cloud)
 try:
     import urllib.request
     import urllib.error
@@ -19,16 +22,23 @@ except ImportError:
     URLLIB_AVAILABLE = False
 
 
+# ─────────────────────────────────────────────
+# إرسال Webhook مع retry
+# ─────────────────────────────────────────────
 def _send_webhook(url: str, payload: dict, retries: int = 2) -> tuple[bool, str]:
-    """إرسال webhook مع retry"""
-    if not url or not URLLIB_AVAILABLE:
-        return False, "لا يوجد URL أو مكتبة urllib"
-    
+    if not url:
+        return False, "❌ لا يوجد Webhook URL"
+
+    if not URLLIB_AVAILABLE:
+        return False, "❌ مكتبة urllib غير متوفرة"
+
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
     for attempt in range(retries + 1):
         try:
             req = urllib.request.Request(
-                url, data=data,
+                url,
+                data=data,
                 headers={"Content-Type": "application/json; charset=utf-8"},
                 method="POST"
             )
@@ -36,20 +46,21 @@ def _send_webhook(url: str, payload: dict, retries: int = 2) -> tuple[bool, str]
                 status = resp.getcode()
                 if 200 <= status < 300:
                     return True, f"✅ تم الإرسال (HTTP {status})"
-                return False, f"HTTP {status}"
+                return False, f"⚠️ HTTP {status}"
+
         except Exception as e:
             if attempt < retries:
                 time.sleep(1)
             else:
-                return False, f"خطأ: {str(e)[:60]}"
-    return False, "فشل بعد كل المحاولات"
+                return False, f"❌ خطأ: {str(e)[:80]}"
+
+    return False, "❌ فشل بعد كل المحاولات"
 
 
+# ─────────────────────────────────────────────
+# إرسال تحديثات الأسعار
+# ─────────────────────────────────────────────
 def send_price_updates(webhook_url: str, items: list, session_id: str = "") -> dict:
-    """
-    إرسال قائمة تحديثات الأسعار لـ Make.com
-    items: [{product_no, my_name, my_price, suggested_price, competitor, comp_price, diff_pct}]
-    """
     if not items:
         return {"success": False, "message": "لا توجد عناصر للإرسال"}
 
@@ -71,14 +82,15 @@ def send_price_updates(webhook_url: str, items: list, session_id: str = "") -> d
             for i in items[:200]
         ]
     }
+
     ok, msg = _send_webhook(webhook_url, payload)
     return {"success": ok, "message": msg, "count": len(items)}
 
 
+# ─────────────────────────────────────────────
+# إرسال المنتجات المفقودة
+# ─────────────────────────────────────────────
 def send_missing_products(webhook_url: str, items: list, session_id: str = "") -> dict:
-    """
-    إرسال قائمة المنتجات المفقودة لـ Make.com
-    """
     if not items:
         return {"success": False, "message": "لا توجد منتجات مفقودة"}
 
@@ -99,17 +111,21 @@ def send_missing_products(webhook_url: str, items: list, session_id: str = "") -
             for i in items[:200]
         ]
     }
+
     ok, msg = _send_webhook(webhook_url, payload)
     return {"success": ok, "message": msg, "count": len(items)}
 
 
+# ─────────────────────────────────────────────
+# إرسال تقرير كامل للجلسة
+# ─────────────────────────────────────────────
 def send_full_report(webhook_url: str, stats: dict, session_id: str = "") -> dict:
-    """إرسال تقرير كامل للجلسة"""
     payload = {
         "event": "analysis_complete",
         "session_id": session_id,
         "timestamp": datetime.now().isoformat(),
         "stats": stats,
     }
+
     ok, msg = _send_webhook(webhook_url, payload)
     return {"success": ok, "message": msg}
