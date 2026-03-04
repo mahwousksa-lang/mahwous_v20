@@ -428,8 +428,8 @@ class DatabaseManager:
 
         cur = self.conn.execute("""
             INSERT INTO missing_products 
-            (fingerprint,raw_name,competitor_name,competitor_price,brand,importance_score,competitors_list,status,possible_match_fp,possible_match_name,possible_match_score)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            (fingerprint,raw_name,competitor_name,competitor_price,brand,importance_score,competitors_count,competitors_list,status,possible_match_fp,possible_match_name,possible_match_score)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             fingerprint,
             raw_name,
@@ -437,6 +437,7 @@ class DatabaseManager:
             competitor_price,
             brand,
             importance,
+            1,
             json.dumps([competitor_name], ensure_ascii=False),
             status,
             possible_match_fp,
@@ -527,5 +528,9 @@ class DatabaseManager:
 
         if existing:
             self.conn.execute("""
-               
-
+                UPDATE price_modifications 
+                SET new_price=?, price_diff=?, reason=?, competitor_name=?, competitor_price=?, session_id=?, updated_at=CURRENT_TIMESTAMP
+                WHERE id=?
+            """, (
+                new_price,
+                new_price
