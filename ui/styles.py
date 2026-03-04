@@ -1,24 +1,23 @@
 import streamlit as st
 
-
+# ─────────────────────────────────────────────
+# CSS
+# ─────────────────────────────────────────────
 def inject_css():
     css = """
     <style>
-    /* خلفية الصفحة */
     .stApp {
-        background-color: #050816;
-        color: #ffffff;
+        background-color: #0F1117;
+        color: #FAFAFA;
     }
 
-    /* إخفاء الهيدر والفوتر الافتراضيين */
     header, footer {visibility: hidden;}
 
-    /* كروت الإحصائيات */
     .stat-card {
-        background: #0f172a;
+        background: #1E2436;
         border-radius: 12px;
         padding: 16px 20px;
-        border: 1px solid #1e293b;
+        border: 1px solid #2c3245;
     }
     .stat-title {
         font-size: 0.9rem;
@@ -27,21 +26,20 @@ def inject_css():
     .stat-value {
         font-size: 1.4rem;
         font-weight: 700;
-        color: #e5e7eb;
+        color: #ffffff;
     }
 
-    /* كرت المنتج */
     .product-card {
-        background: #020617;
+        background: #1A1F2E;
         border-radius: 14px;
         padding: 16px 18px;
-        border: 1px solid #1f2937;
+        border: 1px solid #2c3245;
         margin-bottom: 10px;
     }
     .product-title {
         font-weight: 700;
         font-size: 1rem;
-        color: #e5e7eb;
+        color: #ffffff;
     }
     .product-sub {
         font-size: 0.85rem;
@@ -52,29 +50,37 @@ def inject_css():
     st.markdown(css, unsafe_allow_html=True)
 
 
-def render_header():
-    col1, col2 = st.columns([0.7, 0.3])
-    with col1:
-        st.markdown("### مهووس v22 — لوحة تحليل الأسعار الذكية")
-        st.markdown("#### مقارنة أسعارك مع المنافسين + اكتشاف المنتجات الناقصة")
-    with col2:
-        st.markdown(
-            "<div style='text-align:right; font-size:0.85rem; color:#9ca3af;'>إصدار v22</div>",
-            unsafe_allow_html=True,
-        )
+# ─────────────────────────────────────────────
+# HEADER — متوافق مع app.py
+# ─────────────────────────────────────────────
+def render_header(ai_available=False, ai_calls=0):
+    status_color = "#22c55e" if ai_available else "#ef4444"
+    status_text = "متاح" if ai_available else "غير متاح"
+
+    st.markdown(
+        f"""
+        <div style="padding: 15px 0 25px 0;">
+            <h2 style="margin-bottom: 6px; color:#ffffff;">
+                مهووس v22 — لوحة تحليل الأسعار الذكية
+            </h2>
+
+            <div style="font-size: 0.9rem; color:#9ca3af;">
+                حالة الذكاء الاصطناعي:
+                <span style="color:{status_color}; font-weight:700;">
+                    {status_text}
+                </span>
+                — عدد النداءات: {ai_calls}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
+# ─────────────────────────────────────────────
+# STAT CARDS
+# ─────────────────────────────────────────────
 def render_stats_cards(stats: dict):
-    """
-    stats مثال:
-    {
-        "total_my_products": 120,
-        "total_matched": 80,
-        "total_higher": 20,
-        "total_lower": 30,
-        "total_missing": 10,
-    }
-    """
     col1, col2, col3, col4, col5 = st.columns(5)
 
     def _card(col, title, value):
@@ -96,19 +102,10 @@ def render_stats_cards(stats: dict):
     _card(col5, "منتجات ناقصة", stats.get("total_missing", 0))
 
 
+# ─────────────────────────────────────────────
+# PRODUCT CARD
+# ─────────────────────────────────────────────
 def render_product_card(product: dict):
-    """
-    product مثال:
-    {
-        "raw_name": "...",
-        "brand": "...",
-        "my_price": 100,
-        "competitor_name": "...",
-        "competitor_price": 120,
-        "price_diff": -20,
-        "price_status": "lower" / "higher" / "equal",
-    }
-    """
     diff = product.get("price_diff")
     status = product.get("price_status", "")
     color = "#22c55e" if status == "lower" else "#ef4444" if status == "higher" else "#e5e7eb"
